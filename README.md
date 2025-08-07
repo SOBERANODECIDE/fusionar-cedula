@@ -1,1 +1,1 @@
-API que fusiona uma imagem base64 gerada pelo usuário com a imagem da cédula oficial fixa (PNG), retornando uma imagem final pronta para impressão.
+# Fusionar Cédula API\n\nAPI para fusionar uma imagem base64 com uma PNG base. Retorna uma imagem final em PNG para download.
