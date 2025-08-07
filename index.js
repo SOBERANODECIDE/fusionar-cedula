@@ -3,7 +3,17 @@ const express = require("express");
 const fetch = require("node-fetch");
 const sharp = require("sharp");
 
-const app = express();
+const app = express();// Habilitar CORS para permitir requisições do navegador
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204); // Resposta para preflight
+  }
+  next();
+});
+
 app.use(express.json({ limit: "10mb" }));
 
 app.post("/fusionar-cedula", async (req, res) => {
