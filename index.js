@@ -83,6 +83,8 @@ app.post("/fusionar-cedula", async (req, res) => {
 });
 
 app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
+// Nova rota de saúde
+app.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
 const PORT = process.env.PORT || 3000;// 🔽 Novo endpoint: converte PNG final em PDF A4 com 86×120 mm centralizado
 app.post("/png-to-a4-pdf", async (req, res) => {
   try {
@@ -141,6 +143,9 @@ app.post("/png-to-a4-pdf", async (req, res) => {
   }
 });
 
+// Health checks
+app.get("/", (_, res) => res.status(200).send("OK"));
+app.get("/healthz", (_, res) => res.status(200).json({ ok: true }));
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
 
 
