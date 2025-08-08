@@ -83,7 +83,64 @@ app.post("/fusionar-cedula", async (req, res) => {
 });
 
 app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;// 🔽 Novo endpoint: converte PNG final em PDF A4 com 86×120 mm centralizado
+app.post("/png-to-a4-pdf", async (req, res) => {
+  try {
+    const { fusedBase64, fusedUrl } = req.body;
+    if (!fusedBase64 && !fusedUrl) {
+      return res.status(400).send("Faltan datos: fusedBase64 o fusedUrl.");
+    }
+
+    // Obter buffer da imagem final
+    let pngBuffer;
+    if (fusedBase64) {
+      const b64 = fusedBase64.replace(/^data:image\/\w+;base64,/, "");
+      pngBuffer = Buffer.from(b64, "base64");
+    } else {
+      const r = await fetch(fusedUrl);
+      if (!r.ok) throw new Error("No se pudo descargar la imagen final.");
+      pngBuffer = await r.buffer();
+    }
+
+    // Medidas em pontos (1pt = 1/72 pol; 1 pol = 25,4 mm)
+    const mmToPt = mm => Math.round(mm / 25.4 * 72);
+    const A4_W = mmToPt(210);  // ~595 pt
+    const A4_H = mmToPt(297);  // ~842 pt
+    const CED_W = mmToPt(86);  // ~244 pt
+    const CED_H = mmToPt(120); // ~340 pt
+
+    const left = Math.round((A4_W - CED_W) / 2);
+    const top  = Math.round((A4_H - CED_H) / 2);
+
+    const sharp = require("sharp");
+
+    // Redimensionar a cédula para 86×120 mm (em pontos)
+    const cedulaSized = await sharp(pngBuffer)
+      .resize({ width: CED_W, height: CED_H, fit: "cover" })
+      .png()
+      .toBuffer();
+
+    // Criar página A4 branca e compor a cédula centralizada
+    const a4PdfBuffer = await sharp({
+      create: {
+        width: A4_W,
+        height: A4_H,
+        channels: 3,
+        background: { r: 255, g: 255, b: 255 }
+      }
+    })
+      .composite([{ input: cedulaSized, left, top }])
+      .toFormat("pdf")
+      .toBuffer();
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=\"Cedula_A4.pdf\"");
+    return res.send(a4PdfBuffer);
+  } catch (err) {
+    return res.status(500).send("Error al generar PDF A4: " + err.message);
+  }
+});
+
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
 
 
