@@ -3,11 +3,13 @@
 const express = require("express");
 const fetch = require("node-fetch");
 const sharp = require("sharp");
-const { google } = require("googleapis"); // <- Google Sheets
+const { google } = require("googleapis"); // Google Sheets
 
 const app = express();
 
-// ===== CORS =====
+/* ============================
+   CORS
+============================ */
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -16,10 +18,14 @@ app.use((req, res, next) => {
   next();
 });
 
-// ===== JSON grande (Base64) =====
+/* ============================
+   JSON grande (Base64)
+============================ */
 app.use(express.json({ limit: "20mb" }));
 
-// ===== Utilitário: remover branco quase puro (torna transparente) =====
+/* ============================
+   Util: tornar branco quase puro transparente
+============================ */
 async function whiteToTransparent(inputBuffer, tolerance = 250) {
   const { data, info } = await sharp(inputBuffer)
     .ensureAlpha()
@@ -36,7 +42,10 @@ async function whiteToTransparent(inputBuffer, tolerance = 250) {
   }).png().toBuffer();
 }
 
-// ===== Fusão de PNG =====
+/* ============================
+   Fusão de PNG (retorna PNG)
+   body: { base64Overlay, urlBaseImage }
+============================ */
 app.post("/fusionar-cedula", async (req, res) => {
   try {
     const { base64Overlay, urlBaseImage } = req.body;
@@ -44,6 +53,7 @@ app.post("/fusionar-cedula", async (req, res) => {
       return res.status(400).send("Faltan datos: base64Overlay y urlBaseImage.");
     }
 
+    // Base oficial (Supabase)
     const baseResp = await fetch(urlBaseImage);
     if (!baseResp.ok) throw new Error("No se pudo descargar la imagen base.");
     const baseBuf = await baseResp.buffer();
@@ -54,6 +64,7 @@ app.post("/fusionar-cedula", async (req, res) => {
     const H = meta.height;
     if (!W || !H) throw new Error("No se pudo leer dimensiones de la imagen base.");
 
+    // Overlay (capa do usuário)
     const overlayRaw = Buffer.from(
       String(base64Overlay).replace(/^data:image\/\w+;base64,/, ""),
       "base64"
@@ -66,6 +77,7 @@ app.post("/fusionar-cedula", async (req, res) => {
 
     const overlayNoWhite = await whiteToTransparent(overlaySized, 250);
 
+    // Funde
     const finalPng = await baseSharp
       .resize({ width: W, height: H })
       .composite([{ input: overlayNoWhite, blend: "over" }])
@@ -79,7 +91,12 @@ app.post("/fusionar-cedula", async (req, res) => {
   }
 });
 
-// ===== PDF A4 (86×120 mm) via PDFKit (híbrido) =====
+/* ============================
+   PDF A4 (86×120 mm) via PDFKit (híbrido)
+   body aceita:
+   - { fusedBase64 }   ou  { fusedUrl }
+   - { base64Overlay, urlBaseImage }  (fallback: funde no servidor)
+============================ */
 app.post("/png-to-a4-pdf", async (req, res) => {
   try {
     const { fusedBase64, fusedUrl, base64Overlay, urlBaseImage } = req.body;
@@ -96,7 +113,7 @@ app.post("/png-to-a4-pdf", async (req, res) => {
         pngBuffer = await r.buffer();
       }
     } else if (base64Overlay && urlBaseImage) {
-      // Caso 2: veio CAPA + URL da base → funde no servidor
+      // Caso 2: CAPA + URL da base → funde no servidor
       const baseResp = await fetch(urlBaseImage);
       if (!baseResp.ok) throw new Error("No se pudo descargar la imagen base.");
       const baseBuf = await baseResp.buffer();
@@ -135,7 +152,7 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       return res.status(400).send("Faltan datos: fusedBase64/fusedUrl o base64Overlay+urlBaseImage.");
     }
 
-    // PDF A4 com 86×120 mm centralizado (PDFKit)
+    // PDF A4 com 86×120 mm centralizado
     const mmToPt = mm => Math.round((mm / 25.4) * 72);
     const A4_W = mmToPt(210), A4_H = mmToPt(297);
     const CED_W = mmToPt(86),  CED_H = mmToPt(120);
@@ -163,7 +180,14 @@ app.post("/png-to-a4-pdf", async (req, res) => {
   }
 });
 
-// ===== Teste de escrita no Google Sheets (TEMPORÁRIO) =====
+/* ============================
+   Teste de escrita no Google Sheets (TEMPORÁRIO)
+   Requer variáveis de ambiente:
+   - GOOGLE_SERVICE_ACCOUNT_EMAIL
+   - GOOGLE_PRIVATE_KEY  (com \n; o código converte)
+   - SHEETS_SPREADSHEET_ID
+   - (opcional) SHEETS_TAB_NAME = "Registros"
+============================ */
 app.post("/test-sheets", async (req, res) => {
   try {
     const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -174,11 +198,10 @@ app.post("/test-sheets", async (req, res) => {
       return res.status(500).send("Faltam GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY");
     }
 
-    const spreadsheetId =
-      process.env.SHEETS_SPREADSHEET_ID || "COLE_AQUI_O_ID_DA_PLANILHA";
+    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
     const tabName = process.env.SHEETS_TAB_NAME || "Registros";
-    if (!spreadsheetId || spreadsheetId.includes("COLE_AQUI_O_ID")) {
-      return res.status(500).send("Defina SHEETS_SPREADSHEET_ID (ou substitua o placeholder no código).");
+    if (!spreadsheetId) {
+      return res.status(500).send("Falta SHEETS_SPREADSHEET_ID");
     }
 
     const auth = new google.auth.JWT({
@@ -212,13 +235,18 @@ app.post("/test-sheets", async (req, res) => {
   }
 });
 
-// ===== Health checks =====
-app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
+/* ============================
+   Health
+============================ */
 app.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
+app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
 
-// ===== Start server =====
+/* ============================
+   Start server
+============================ */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
+
 
 
 
