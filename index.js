@@ -3,6 +3,7 @@
 const express = require("express");
 const fetch = require("node-fetch");
 const sharp = require("sharp");
+const { google } = require("googleapis"); // <- Google Sheets
 
 const app = express();
 
@@ -54,7 +55,7 @@ app.post("/fusionar-cedula", async (req, res) => {
     if (!W || !H) throw new Error("No se pudo leer dimensiones de la imagen base.");
 
     const overlayRaw = Buffer.from(
-      base64Overlay.replace(/^data:image\/\w+;base64,/, ""),
+      String(base64Overlay).replace(/^data:image\/\w+;base64,/, ""),
       "base64"
     );
 
@@ -78,7 +79,7 @@ app.post("/fusionar-cedula", async (req, res) => {
   }
 });
 
-// ===== PDF A4 (86×120 mm) via PDFKit =====
+// ===== PDF A4 (86×120 mm) via PDFKit (híbrido) =====
 app.post("/png-to-a4-pdf", async (req, res) => {
   try {
     const { fusedBase64, fusedUrl, base64Overlay, urlBaseImage } = req.body;
@@ -138,8 +139,8 @@ app.post("/png-to-a4-pdf", async (req, res) => {
     const mmToPt = mm => Math.round((mm / 25.4) * 72);
     const A4_W = mmToPt(210), A4_H = mmToPt(297);
     const CED_W = mmToPt(86),  CED_H = mmToPt(120);
-    const left = Math.round((A4_W - CED_W)/2);
-    const top  = Math.round((A4_H - CED_H)/2);
+    const left = Math.round((A4_W - CED_W) / 2);
+    const top  = Math.round((A4_H - CED_H) / 2);
 
     const PDFDocument = require("pdfkit");
     const doc = new PDFDocument({ size: [A4_W, A4_H], margin: 0 });
@@ -153,7 +154,7 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       res.send(pdfBuffer);
     });
 
-    doc.rect(0,0,A4_W,A4_H).fill("#FFFFFF");
+    doc.rect(0, 0, A4_W, A4_H).fill("#FFFFFF");
     doc.image(pngBuffer, left, top, { width: CED_W, height: CED_H });
     doc.end();
 
@@ -162,6 +163,54 @@ app.post("/png-to-a4-pdf", async (req, res) => {
   }
 });
 
+// ===== Teste de escrita no Google Sheets (TEMPORÁRIO) =====
+app.post("/test-sheets", async (req, res) => {
+  try {
+    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    let privateKey = process.env.GOOGLE_PRIVATE_KEY || "";
+    privateKey = privateKey.replace(/\\n/g, "\n"); // corrige quebras
+
+    if (!clientEmail || !privateKey) {
+      return res.status(500).send("Faltam GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY");
+    }
+
+    const spreadsheetId =
+      process.env.SHEETS_SPREADSHEET_ID || "COLE_AQUI_O_ID_DA_PLANILHA";
+    const tabName = process.env.SHEETS_TAB_NAME || "Registros";
+    if (!spreadsheetId || spreadsheetId.includes("COLE_AQUI_O_ID")) {
+      return res.status(500).send("Defina SHEETS_SPREADSHEET_ID (ou substitua o placeholder no código).");
+    }
+
+    const auth = new google.auth.JWT({
+      email: clientEmail,
+      key: privateKey,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+    const sheets = google.sheets({ version: "v4", auth });
+
+    // 🔽 Dados de teste — ajuste se quiser
+    const row = [
+      "Teste Integración",
+      "Caracas",
+      "01/01/2000",
+      "+58",
+      "4140000000",
+      "teste@example.com",
+      "00000099",
+    ];
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${tabName}!A:G`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [row] },
+    });
+
+    res.json({ ok: true, appended: row });
+  } catch (e) {
+    res.status(500).send("Erro ao escrever no Sheets: " + e.message);
+  }
+});
 
 // ===== Health checks =====
 app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
@@ -170,6 +219,7 @@ app.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
 // ===== Start server =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
+
 
 
 
