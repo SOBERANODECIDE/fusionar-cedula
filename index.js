@@ -5,7 +5,7 @@ const sharp = require("sharp");
 
 const app = express();
 
-// CORS (deixe isto no topo para evitar bloqueios do navegador)
+// CORS (topo)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -14,10 +14,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Aumenta o limite do corpo JSON (se o base64 for grande)
+// JSON grande (base64)
 app.use(express.json({ limit: "20mb" }));
 
-// Converte “quase branco” em transparente (remove fundo branco da capa)
+// === Util: remover branco quase puro (torna transparente) ===
 async function whiteToTransparent(inputBuffer, tolerance = 250) {
   const { data, info } = await sharp(inputBuffer)
     .ensureAlpha()
@@ -34,6 +34,7 @@ async function whiteToTransparent(inputBuffer, tolerance = 250) {
   }).png().toBuffer();
 }
 
+// === Fusão PNG (retorna PNG) ===
 app.post("/fusionar-cedula", async (req, res) => {
   try {
     const { base64Overlay, urlBaseImage } = req.body;
@@ -41,7 +42,7 @@ app.post("/fusionar-cedula", async (req, res) => {
       return res.status(400).send("Faltan datos: base64Overlay y urlBaseImage.");
     }
 
-    // 1) Baixa a imagem base (PNG oficial do Supabase) e lê as dimensões
+    // base oficial (Supabase)
     const baseResp = await fetch(urlBaseImage);
     if (!baseResp.ok) throw new Error("No se pudo descargar la imagen base.");
     const baseBuf = await baseResp.buffer();
@@ -52,26 +53,23 @@ app.post("/fusionar-cedula", async (req, res) => {
     const H = meta.height;
     if (!W || !H) throw new Error("No se pudo leer dimensiones de la imagen base.");
 
-    // 2) Prepara o overlay: remove prefixo, redimensiona para W×H e remove branco
+    // overlay (capa do usuário)
     const overlayRaw = Buffer.from(
       base64Overlay.replace(/^data:image\/\w+;base64,/, ""),
       "base64"
     );
 
     const overlaySized = await sharp(overlayRaw)
-      .resize({ width: W, height: H, fit: "cover" }) // garante tamanho idêntico
+      .resize({ width: W, height: H, fit: "cover" })
       .png()
       .toBuffer();
 
     const overlayNoWhite = await whiteToTransparent(overlaySized, 250);
 
-    // 3) Funde (ajuste left/top se precisar micro-alinhar)
+    // funde
     const finalPng = await baseSharp
       .resize({ width: W, height: H })
-      .composite([
-        { input: overlayNoWhite, blend: "over" }
-        // Ex.: { input: overlayNoWhite, left: 2, top: -3, blend: "over" }
-      ])
+      .composite([{ input: overlayNoWhite, blend: "over" }])
       .png()
       .toBuffer();
 
@@ -82,10 +80,11 @@ app.post("/fusionar-cedula", async (req, res) => {
   }
 });
 
+// === Health (uma só vez) ===
 app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
-// Nova rota de saúde
 app.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
-const PORT = process.env.PORT || 3000;// 🔽 Novo endpoint: converte PNG final em PDF A4 com 86×120 mm centralizado
+
+// === PDF A4 (86×120 mm) via PDFKit ===
 app.post("/png-to-a4-pdf", async (req, res) => {
   try {
     const { fusedBase64, fusedUrl } = req.body;
@@ -93,7 +92,7 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       return res.status(400).send("Faltan datos: fusedBase64 o fusedUrl.");
     }
 
-    // Obter buffer da imagem final
+    // buffer da PNG final
     let pngBuffer;
     if (fusedBase64) {
       const b64 = fusedBase64.replace(/^data:image\/\w+;base64,/, "");
@@ -104,48 +103,39 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       pngBuffer = await r.buffer();
     }
 
-    // Medidas em pontos (1pt = 1/72 pol; 1 pol = 25,4 mm)
-    const mmToPt = mm => Math.round(mm / 25.4 * 72);
-    const A4_W = mmToPt(210);  // ~595 pt
-    const A4_H = mmToPt(297);  // ~842 pt
-    const CED_W = mmToPt(86);  // ~244 pt
-    const CED_H = mmToPt(120); // ~340 pt
+    // medidas em pontos
+    const mmToPt = mm => Math.round((mm / 25.4) * 72);
+    const A4_W = mmToPt(210);
+    const A4_H = mmToPt(297);
+    const CED_W = mmToPt(86);
+    const CED_H = mmToPt(120);
+    const left  = Math.round((A4_W - CED_W) / 2);
+    const top   = Math.round((A4_H - CED_H) / 2);
 
-    const left = Math.round((A4_W - CED_W) / 2);
-    const top  = Math.round((A4_H - CED_H) / 2);
+    const PDFDocument = require("pdfkit");
+    const doc = new PDFDocument({ size: [A4_W, A4_H], margin: 0 });
 
-    const sharp = require("sharp");
+    const chunks = [];
+    doc.on("data", c => chunks.push(c));
+    doc.on("end", () => {
+      const pdfBuffer = Buffer.concat(chunks);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", 'attachment; filename="Cedula_A4.pdf"');
+      res.send(pdfBuffer);
+    });
 
-    // Redimensionar a cédula para 86×120 mm (em pontos)
-    const cedulaSized = await sharp(pngBuffer)
-      .resize({ width: CED_W, height: CED_H, fit: "cover" })
-      .png()
-      .toBuffer();
+    // fundo branco + imagem centralizada
+    doc.rect(0, 0, A4_W, A4_H).fill("#FFFFFF");
+    doc.image(pngBuffer, left, top, { width: CED_W, height: CED_H });
 
-    // Criar página A4 branca e compor a cédula centralizada
-    const a4PdfBuffer = await sharp({
-      create: {
-        width: A4_W,
-        height: A4_H,
-        channels: 3,
-        background: { r: 255, g: 255, b: 255 }
-      }
-    })
-      .composite([{ input: cedulaSized, left, top }])
-      .toFormat("pdf")
-      .toBuffer();
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=\"Cedula_A4.pdf\"");
-    return res.send(a4PdfBuffer);
+    doc.end();
   } catch (err) {
-    return res.status(500).send("Error al generar PDF A4: " + err.message);
+    res.status(500).send("Error al generar PDF A4: " + err.message);
   }
 });
 
-// Health checks
-app.get("/", (_, res) => res.status(200).send("OK"));
-app.get("/healthz", (_, res) => res.status(200).json({ ok: true }));
+// === Start server (sempre por último) ===
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
 
 
