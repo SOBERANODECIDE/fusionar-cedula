@@ -81,28 +81,65 @@ app.post("/fusionar-cedula", async (req, res) => {
 // ===== PDF A4 (86×120 mm) via PDFKit =====
 app.post("/png-to-a4-pdf", async (req, res) => {
   try {
-    const { fusedBase64, fusedUrl } = req.body;
-    if (!fusedBase64 && !fusedUrl) {
-      return res.status(400).send("Faltan datos: fusedBase64 o fusedUrl.");
-    }
-
+    const { fusedBase64, fusedUrl, base64Overlay, urlBaseImage } = req.body;
     let pngBuffer;
-    if (fusedBase64) {
-      const b64 = fusedBase64.replace(/^data:image\/\w+;base64,/, "");
-      pngBuffer = Buffer.from(b64, "base64");
+
+    if (fusedBase64 || fusedUrl) {
+      // Caso 1: PNG final já fundida
+      if (fusedBase64) {
+        const b64 = String(fusedBase64).replace(/^data:image\/\w+;base64,/, "");
+        pngBuffer = Buffer.from(b64, "base64");
+      } else {
+        const r = await fetch(fusedUrl);
+        if (!r.ok) throw new Error("No se pudo descargar la imagen final.");
+        pngBuffer = await r.buffer();
+      }
+    } else if (base64Overlay && urlBaseImage) {
+      // Caso 2: veio CAPA + URL da base → funde no servidor
+      const baseResp = await fetch(urlBaseImage);
+      if (!baseResp.ok) throw new Error("No se pudo descargar la imagen base.");
+      const baseBuf = await baseResp.buffer();
+
+      const baseSharp = sharp(baseBuf);
+      const { width: W, height: H } = await baseSharp.metadata();
+      if (!W || !H) throw new Error("Dimensiones inválidas de la imagen base.");
+
+      const overlayRaw = Buffer.from(
+        String(base64Overlay).replace(/^data:image\/\w+;base64,/, ""),
+        "base64"
+      );
+
+      const overlaySized = await sharp(overlayRaw)
+        .resize({ width: W, height: H, fit: "cover" })
+        .png()
+        .toBuffer();
+
+      // tornar branco transparente (opcional)
+      const { data, info } = await sharp(overlaySized).ensureAlpha().raw()
+        .toBuffer({ resolveWithObject: true });
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i+1], b = data[i+2];
+        if (r >= 250 && g >= 250 && b >= 250) data[i+3] = 0;
+      }
+      const overlayNoWhite = await sharp(data, {
+        raw: { width: info.width, height: info.height, channels: 4 }
+      }).png().toBuffer();
+
+      pngBuffer = await baseSharp
+        .resize({ width: W, height: H })
+        .composite([{ input: overlayNoWhite, blend: "over" }])
+        .png()
+        .toBuffer();
     } else {
-      const r = await fetch(fusedUrl);
-      if (!r.ok) throw new Error("No se pudo descargar la imagen final.");
-      pngBuffer = await r.buffer();
+      return res.status(400).send("Faltan datos: fusedBase64/fusedUrl o base64Overlay+urlBaseImage.");
     }
 
+    // PDF A4 com 86×120 mm centralizado (PDFKit)
     const mmToPt = mm => Math.round((mm / 25.4) * 72);
-    const A4_W = mmToPt(210);
-    const A4_H = mmToPt(297);
-    const CED_W = mmToPt(86);
-    const CED_H = mmToPt(120);
-    const left  = Math.round((A4_W - CED_W) / 2);
-    const top   = Math.round((A4_H - CED_H) / 2);
+    const A4_W = mmToPt(210), A4_H = mmToPt(297);
+    const CED_W = mmToPt(86),  CED_H = mmToPt(120);
+    const left = Math.round((A4_W - CED_W)/2);
+    const top  = Math.round((A4_H - CED_H)/2);
 
     const PDFDocument = require("pdfkit");
     const doc = new PDFDocument({ size: [A4_W, A4_H], margin: 0 });
@@ -116,14 +153,15 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       res.send(pdfBuffer);
     });
 
-    doc.rect(0, 0, A4_W, A4_H).fill("#FFFFFF");
+    doc.rect(0,0,A4_W,A4_H).fill("#FFFFFF");
     doc.image(pngBuffer, left, top, { width: CED_W, height: CED_H });
-
     doc.end();
+
   } catch (err) {
     res.status(500).send("Error al generar PDF A4: " + err.message);
   }
 });
+
 
 // ===== Health checks =====
 app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
