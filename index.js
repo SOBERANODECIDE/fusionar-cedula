@@ -5,7 +5,7 @@ const sharp = require("sharp");
 
 const app = express();
 
-// CORS (topo)
+// ===== CORS =====
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -14,10 +14,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// JSON grande (base64)
+// ===== JSON grande (Base64) =====
 app.use(express.json({ limit: "20mb" }));
 
-// === Util: remover branco quase puro (torna transparente) ===
+// ===== Utilitário: remover branco quase puro (torna transparente) =====
 async function whiteToTransparent(inputBuffer, tolerance = 250) {
   const { data, info } = await sharp(inputBuffer)
     .ensureAlpha()
@@ -34,7 +34,7 @@ async function whiteToTransparent(inputBuffer, tolerance = 250) {
   }).png().toBuffer();
 }
 
-// === Fusão PNG (retorna PNG) ===
+// ===== Fusão de PNG =====
 app.post("/fusionar-cedula", async (req, res) => {
   try {
     const { base64Overlay, urlBaseImage } = req.body;
@@ -42,7 +42,6 @@ app.post("/fusionar-cedula", async (req, res) => {
       return res.status(400).send("Faltan datos: base64Overlay y urlBaseImage.");
     }
 
-    // base oficial (Supabase)
     const baseResp = await fetch(urlBaseImage);
     if (!baseResp.ok) throw new Error("No se pudo descargar la imagen base.");
     const baseBuf = await baseResp.buffer();
@@ -53,7 +52,6 @@ app.post("/fusionar-cedula", async (req, res) => {
     const H = meta.height;
     if (!W || !H) throw new Error("No se pudo leer dimensiones de la imagen base.");
 
-    // overlay (capa do usuário)
     const overlayRaw = Buffer.from(
       base64Overlay.replace(/^data:image\/\w+;base64,/, ""),
       "base64"
@@ -66,7 +64,6 @@ app.post("/fusionar-cedula", async (req, res) => {
 
     const overlayNoWhite = await whiteToTransparent(overlaySized, 250);
 
-    // funde
     const finalPng = await baseSharp
       .resize({ width: W, height: H })
       .composite([{ input: overlayNoWhite, blend: "over" }])
@@ -80,11 +77,7 @@ app.post("/fusionar-cedula", async (req, res) => {
   }
 });
 
-// === Health (uma só vez) ===
-app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
-app.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
-
-// === PDF A4 (86×120 mm) via PDFKit ===
+// ===== PDF A4 (86×120 mm) via PDFKit =====
 app.post("/png-to-a4-pdf", async (req, res) => {
   try {
     const { fusedBase64, fusedUrl } = req.body;
@@ -92,7 +85,6 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       return res.status(400).send("Faltan datos: fusedBase64 o fusedUrl.");
     }
 
-    // buffer da PNG final
     let pngBuffer;
     if (fusedBase64) {
       const b64 = fusedBase64.replace(/^data:image\/\w+;base64,/, "");
@@ -103,7 +95,6 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       pngBuffer = await r.buffer();
     }
 
-    // medidas em pontos
     const mmToPt = mm => Math.round((mm / 25.4) * 72);
     const A4_W = mmToPt(210);
     const A4_H = mmToPt(297);
@@ -124,7 +115,6 @@ app.post("/png-to-a4-pdf", async (req, res) => {
       res.send(pdfBuffer);
     });
 
-    // fundo branco + imagem centralizada
     doc.rect(0, 0, A4_W, A4_H).fill("#FFFFFF");
     doc.image(pngBuffer, left, top, { width: CED_W, height: CED_H });
 
@@ -134,9 +124,15 @@ app.post("/png-to-a4-pdf", async (req, res) => {
   }
 });
 
-// === Start server (sempre por último) ===
+// ===== Health checks =====
+app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
+app.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
+
+// ===== Start server =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
+
+
 
 
 
