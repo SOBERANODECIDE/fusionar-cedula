@@ -219,7 +219,7 @@ app.get("/list-sheets", async (req, res) => {
    - GOOGLE_SERVICE_ACCOUNT_EMAIL
    - GOOGLE_PRIVATE_KEY  (com \n; o código converte)
    - SHEETS_SPREADSHEET_ID
-   - (opcional) SHEETS_TAB_NAME (default "Registros")
+   - (opcional) SHEETS_TAB_NAME (default "Hoja 1")
 ============================ */
 app.post("/test-sheets", async (req, res) => {
   try {
@@ -232,7 +232,7 @@ app.post("/test-sheets", async (req, res) => {
     }
 
     const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
-    let tabName = process.env.SHEETS_TAB_NAME || "Registros";
+    let tabName = process.env.SHEETS_TAB_NAME || "Hoja 1";
     if (!spreadsheetId) {
       return res.status(500).send("Falta SHEETS_SPREADSHEET_ID");
     }
@@ -272,6 +272,71 @@ app.post("/test-sheets", async (req, res) => {
 });
 
 /* ============================
+   Registrar dados reais do usuário no Google Sheets
+   body esperado:
+   {
+     nomeCompleto, cidadeNascimento, dataNascimento,
+     codigoPais, telefone, email, numeroSoberano
+   }
+============================ */
+app.post("/registrar-soberano", async (req, res) => {
+  try {
+    const {
+      nomeCompleto = "",
+      cidadeNascimento = "",
+      dataNascimento = "",
+      codigoPais = "",
+      telefone = "",
+      email = "",
+      numeroSoberano = ""
+    } = req.body || {};
+
+    if (!nomeCompleto || !cidadeNascimento || !dataNascimento || !codigoPais || !telefone || !numeroSoberano) {
+      return res.status(400).json({ ok: false, error: "Campos obrigatórios faltando." });
+    }
+
+    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    let privateKey = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
+    let tabName = process.env.SHEETS_TAB_NAME || "Hoja 1";
+
+    if (!clientEmail || !privateKey || !spreadsheetId) {
+      return res.status(500).json({ ok: false, error: "Ambiente incompleto (credenciais/planilha)." });
+    }
+
+    const safeTab = `'${String(tabName).trim().replace(/'/g, "''")}'`;
+
+    const auth = new google.auth.JWT({
+      email: clientEmail,
+      key: privateKey,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+    });
+    const sheets = google.sheets({ version: "v4", auth });
+
+    const row = [
+      nomeCompleto,
+      cidadeNascimento,
+      dataNascimento,
+      `${codigoPais}`.trim(),
+      `${telefone}`.trim(),
+      email || "",
+      `${numeroSoberano}`
+    ];
+
+    const result = await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `${safeTab}!A:G`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [row] }
+    });
+
+    return res.json({ ok: true, appended: row, updates: result.data.updates || null });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+/* ============================
    Health
 ============================ */
 app.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
@@ -282,6 +347,7 @@ app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
 ============================ */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
+
 
 
 
