@@ -181,28 +181,64 @@ app.post("/png-to-a4-pdf", async (req, res) => {
 });
 
 /* ============================
+   DEBUG: ver variáveis de ambiente (sem expor valores)
+============================ */
+app.get("/debug-env", (req, res) => {
+  res.json({
+    hasEmail: !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    hasKey: !!process.env.GOOGLE_PRIVATE_KEY,
+    spreadsheetId: process.env.SHEETS_SPREADSHEET_ID || null,
+    tabName_env: process.env.SHEETS_TAB_NAME || null
+  });
+});
+
+/* ============================
+   DEBUG: listar as abas da planilha
+============================ */
+app.get("/list-sheets", async (req, res) => {
+  try {
+    let privateKey = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
+    const auth = new google.auth.JWT({
+      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      key: privateKey,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+    const sheets = google.sheets({ version: "v4", auth });
+    const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
+    const meta = await sheets.spreadsheets.get({ spreadsheetId });
+    const titles = (meta.data.sheets || []).map(s => s.properties.title);
+    res.json({ titles });
+  } catch (e) {
+    res.status(500).send("Erro ao listar abas: " + e.message);
+  }
+});
+
+/* ============================
    Teste de escrita no Google Sheets (TEMPORÁRIO)
    Requer variáveis de ambiente:
    - GOOGLE_SERVICE_ACCOUNT_EMAIL
    - GOOGLE_PRIVATE_KEY  (com \n; o código converte)
    - SHEETS_SPREADSHEET_ID
-   - (opcional) SHEETS_TAB_NAME = "Registros"
+   - (opcional) SHEETS_TAB_NAME (default "Registros")
 ============================ */
 app.post("/test-sheets", async (req, res) => {
   try {
     const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
     let privateKey = process.env.GOOGLE_PRIVATE_KEY || "";
-    privateKey = privateKey.replace(/\\n/g, "\n"); // corrige quebras
+    privateKey = privateKey.replace(/\\n/g, "\n"); // corrige \n literais
 
     if (!clientEmail || !privateKey) {
       return res.status(500).send("Faltam GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_PRIVATE_KEY");
     }
 
     const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
-    const tabName = process.env.SHEETS_TAB_NAME || "Registros";
+    let tabName = process.env.SHEETS_TAB_NAME || "Registros";
     if (!spreadsheetId) {
       return res.status(500).send("Falta SHEETS_SPREADSHEET_ID");
     }
+
+    // força aspas simples no nome da aba (seguro para espaço/acentos/hífens/aspas)
+    const safeTab = `'${String(tabName).trim().replace(/'/g, "''")}'`;
 
     const auth = new google.auth.JWT({
       email: clientEmail,
@@ -224,12 +260,12 @@ app.post("/test-sheets", async (req, res) => {
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${tabName}!A:G`,
+      range: `${safeTab}!A:G`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [row] },
     });
 
-    res.json({ ok: true, appended: row });
+    res.json({ ok: true, appended: row, range: `${safeTab}!A:G`, tabName });
   } catch (e) {
     res.status(500).send("Erro ao escrever no Sheets: " + e.message);
   }
@@ -246,6 +282,7 @@ app.get("/", (req, res) => res.send("API de fusão de cédulas ativa."));
 ============================ */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor rodando na porta " + PORT));
+
 
 
 
